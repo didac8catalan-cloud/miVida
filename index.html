@@ -193,14 +193,26 @@ async function sincronizarAvisosMiVida(manual=false){
     const now=Date.now();
     const items=data.items.filter(x=>['Tarea','Examen','Cita médica','Plan','Sesión de estudio'].includes(x.type));
     const pending=items.map(x=>({item:x,fecha:mividaFechaAviso(x)})).filter(x=>x.fecha&&Date.parse(x.fecha)>now);
-    let ok=0;
-    for(const {item,fecha} of pending){
-      const payload={id:item.id,dispositivo_id:mividaDispositivoId(),titulo:item.title,mensaje:`${item.type}: ${item.title} · ${item.date} a las ${item.time}`,fecha_aviso:fecha};
-      const response=await fetch(MIVIDA_PUSH_API+'/recordatorios',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
-      if(!response.ok){const detail=(await response.text()).slice(0,160);throw new Error('Servidor '+response.status+' al registrar un aviso. '+detail)}
-      ok++;
+    // El Worker espera UNA lista de recordatorios por dispositivo.
+    const dispositivo_id=mividaDispositivoId();
+    const recordatorios=pending.map(({item,fecha})=>({
+      id:String(item.id),
+      titulo:String(item.title||'Recordatorio'),
+      mensaje:`${item.type}: ${item.title} · ${item.date} a las ${item.time}`,
+      fecha_aviso:fecha
+    }));
+    if(recordatorios.length>100)throw new Error('Hay más de 100 avisos futuros; el servidor admite un máximo de 100 por sincronización.');
+    const response=await fetch(MIVIDA_PUSH_API+'/recordatorios',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({dispositivo_id,recordatorios})
+    });
+    if(!response.ok){
+      const detail=(await response.text()).slice(0,250);
+      throw new Error('Servidor '+response.status+' al registrar los avisos. '+detail);
     }
-    show(ok?`${ok} aviso(s) enviado(s) al servidor. Falta comprobar que llegue una notificación real.`:'No hay avisos futuros con fecha y hora para sincronizar.');
+    const result=await response.json();
+    show(`${Number(result.guardados??recordatorios.length)} aviso(s) aceptado(s) por el servidor. Ahora falta comprobar su entrega al iPhone.`);
   }catch(error){
     console.error('MiVida sincronización:',error);
     show('No se han podido registrar los avisos en el servidor: '+(error.message||error));
